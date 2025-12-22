@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-const CLIENT_ID = "9add85a82f364f7191cf181f1bdefa2d"; // <- paste from dashboard
+const CLIENT_ID = "efbb0aad9f8a439fb9f7b774e17e96d4"; 
 const REDIRECT_URI = "http://127.0.0.1:5173/callback"
 
 const SCOPES = [
@@ -11,6 +11,7 @@ const SCOPES = [
 
 // --- PKCE HELPERS ---
 
+// create hashkey for authentication
 function generateRandomString(length = 64) {
   const possible =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -130,7 +131,7 @@ function App() {
         setProfile(meData);
 
         const topRes = await fetch(
-          "https://api.spotify.com/v1/me/top/tracks?limit=10&time_range=long_term",
+          "https://api.spotify.com/v1/me/top/tracks?limit=10&time_range=medium_term",
           { headers }
         );
         const topData = await topRes.json();
