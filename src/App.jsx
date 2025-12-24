@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import AuraBackground from "./components/AuraBackground";
 
 const CLIENT_ID = "efbb0aad9f8a439fb9f7b774e17e96d4";
 const REDIRECT_URI = "http://127.0.0.1:5173/callback";
@@ -50,6 +51,7 @@ async function createCodeChallengePair() {
 // --- APP ---
 
 function App() {
+  // --- STATE ---
   const [accessToken, setAccessToken] = useState(null);
   const [profile, setProfile] = useState(null);
   const [topTracks, setTopTracks] = useState([]);
@@ -60,7 +62,16 @@ function App() {
   const [recentTracks, setRecentTracks] = useState([]);
   const [fatalError, setFatalError] = useState(null);
   const [timeRange, setTimeRange] = useState("short_term");
+  const [topArtists, setTopArtists] = useState([]);
+  const [topGenres, setTopGenres] = useState([]);
+  const [genreRange, setGenreRange] = useState("short_term");
+  const [genreArtists, setGenreArtists] = useState([]);
+  const [artistRange, setArtistRange] = useState("short_term");
+  const [topAlbumsAllTime, setTopAlbumsAllTime] = useState([]);
+  const [albumsLoading, setAlbumsLoading] = useState(false);
+  const [albumsError, setAlbumsError] = useState(null);
 
+  // --- EFFECTS ---
   // 1) User clicks login
   const handleLogin = async () => {
     const { verifier, challenge } = await createCodeChallengePair();
@@ -157,7 +168,7 @@ function App() {
         };
 
         // ✅ 2) Top Tracks (safe)
-        const topUrl = `https://api.spotify.com/v1/me/top/tracks?limit=10&time_range=${timeRange}`;
+        const topUrl = `https://api.spotify.com/v1/me/top/tracks?limit=5&time_range=${timeRange}`;
 
         const top = await fetchJsonSafe(topUrl);
 
@@ -182,7 +193,7 @@ function App() {
 
         // ✅ 3) Recently Played (safe)
         const recentUrl =
-          "https://api.spotify.com/v1/me/player/recently-played?limit=10";
+          "https://api.spotify.com/v1/me/player/recently-played?limit=5";
 
         const recent = await fetchJsonSafe(recentUrl);
 
@@ -209,6 +220,12 @@ function App() {
           }
           setRecentTracks([]);
         }
+
+        // ✅ 4) Top Artists (5)
+        const artistsUrl = `https://api.spotify.com/v1/me/top/artists?limit=5&time_range=${artistRange}`;
+        const artistsRes = await fetch(artistsUrl, { headers });
+        const artistsData = await artistsRes.json();
+        setTopArtists(artistsData.items || []);
       } catch (err) {
         console.error("Data fetch failed:", err);
         setFatalError(String(err));
@@ -218,62 +235,170 @@ function App() {
     };
 
     fetchData();
-  }, [accessToken, timeRange]);
+  }, [accessToken, timeRange, artistRange]);
+
+  // Top Genres calculation
+  useEffect(() => {
+    if (!accessToken) return;
+
+    const fetchGenreArtists = async () => {
+      try {
+        const headers = { Authorization: `Bearer ${accessToken}` };
+        const url = `https://api.spotify.com/v1/me/top/artists?limit=20&time_range=${genreRange}`;
+        const res = await fetch(url, { headers });
+        const data = await res.json();
+        setGenreArtists(data.items || []);
+      } catch (e) {
+        console.error("Genre artists fetch failed:", e);
+        setGenreArtists([]);
+      }
+    };
+
+    fetchGenreArtists();
+  }, [accessToken, genreRange]);
+
+  // Rank genres by frequency
+  useEffect(() => {
+    if (!genreArtists || genreArtists.length === 0) {
+      setTopGenres([]);
+      return;
+    }
+
+    const counts = {};
+
+    for (const artist of genreArtists) {
+      for (const g of artist.genres || []) {
+        const key = g.toLowerCase();
+        counts[key] = (counts[key] || 0) + 1;
+      }
+    }
+
+    const sorted = Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([genre, count]) => ({ genre, count }));
+
+    // ✅ tie-aware ranking: 1,1,3,4,4 style
+    let lastCount = null;
+    let lastRank = 0;
+
+    const ranked = sorted.map((item, index) => {
+      if (item.count !== lastCount) {
+        lastRank = lastRank + 1; // next rank is previous rank + 1
+        lastCount = item.count;
+      }
+      return { ...item, rank: lastRank };
+    });
+
+    setTopGenres(ranked);
+  }, [genreArtists]);
+
+  // Fetch Top Albums All Time
+  useEffect(() => {
+    if (!accessToken) return;
+
+    const fetchAlbumsAllTime = async () => {
+      try {
+        setAlbumsLoading(true);
+        setAlbumsError(null);
+
+        const headers = { Authorization: `Bearer ${accessToken}` };
+
+        // ALL TIME top tracks (use 50 for better album signal)
+        const url =
+          "https://api.spotify.com/v1/me/top/tracks?limit=50&time_range=long_term";
+
+        const res = await fetch(url, { headers });
+        const data = await res.json();
+
+        if (!res.ok) {
+          setAlbumsError(data?.error?.message || "Failed to load top albums");
+          setTopAlbumsAllTime([]);
+          return;
+        }
+
+        const tracks = data.items || [];
+
+        // derive albums from tracks
+        const albumMap = new Map();
+
+        for (const t of tracks) {
+          const album = t.album;
+          if (!album?.id) continue;
+
+          const existing = albumMap.get(album.id);
+
+          if (!existing) {
+            albumMap.set(album.id, {
+              id: album.id,
+              name: album.name,
+              image: album.images?.[1]?.url || album.images?.[0]?.url || "",
+              artist: album.artists?.[0]?.name || "Unknown",
+              count: 1,
+              url: album.external_urls?.spotify || "",
+            });
+          } else {
+            existing.count += 1;
+          }
+        }
+
+        const albumsSorted = Array.from(albumMap.values())
+          .sort((a, b) => b.count - a.count)
+          .slice(0, 5);
+
+        setTopAlbumsAllTime(albumsSorted);
+      } catch (e) {
+        console.error("Albums all-time fetch failed:", e);
+        setAlbumsError(String(e));
+        setTopAlbumsAllTime([]);
+      } finally {
+        setAlbumsLoading(false);
+      }
+    };
+
+    fetchAlbumsAllTime();
+  }, [accessToken]);
 
   // --- UI ---
 
   if (!accessToken) {
-    // Login screen (centered)
     return (
       <main
         style={{
           minHeight: "100vh",
           width: "100vw",
+          position: "relative",
+          overflow: "hidden",
           background: "#020617",
           color: "white",
-          fontFamily: "system-ui, sans-serif",
           display: "flex",
-          alignItems: "flex-start",
+          alignItems: "center",
           justifyContent: "center",
-          padding: "2rem",
-          boxSizing: "border-box",
+          fontFamily: "system-ui, sans-serif",
         }}
       >
-        <div
-          style={{
-            width: "100%",
-            maxWidth: "2000px", // ⬅️ INCREASED from 800px to 1100px
-            textAlign: "center",
-            margin: "auto", // ⬅️ ensures PERFECT center
-          }}
-        >
-          <h1
-            style={{
-              fontSize: "2rem",
-              fontWeight: 700,
-              marginBottom: "0.5rem",
-            }}
-          >
+        {/* ✅ background behind everything */}
+        <AuraBackground />
+
+        {/* ✅ content above background */}
+        <div style={{ position: "relative", zIndex: 10, textAlign: "center" }}>
+          <h1 style={{ fontSize: "2.4rem", fontWeight: 700, marginBottom: 8 }}>
             Wrapify
           </h1>
-          <p
-            style={{
-              fontSize: "0.9rem",
-              color: "#cbd5f5",
-              marginBottom: "1.5rem",
-            }}
-          >
-            Get your Spotify-style wrap any time you want.
+
+          <p style={{ color: "#cbd5f5", marginBottom: "1.5rem" }}>
+            Your anytime Spotify wrap.
           </p>
+
           <button
             onClick={handleLogin}
             style={{
-              padding: "0.75rem 1.5rem",
+              padding: "0.75rem 1.6rem",
               borderRadius: "999px",
               border: "none",
-              cursor: "pointer",
               fontWeight: 600,
-              background: "linear-gradient(135deg,#22c55e,#0ea5e9)",
+              cursor: "pointer",
+              background: "linear-gradient(135deg,#22c55e,#16a34a)",
               color: "white",
             }}
           >
@@ -323,6 +448,7 @@ function App() {
           </p>
         </header>
 
+        {/* user profile */}
         {profile && (
           <section
             style={{
@@ -351,8 +477,114 @@ function App() {
           </section>
         )}
 
-        {/* time blocked for top tracks */}
+        {/* time blocked for top tracks and top artists*/}
         <section>
+          {/* add recently played content */}
+          <h2
+            style={{
+              fontSize: "1.3rem",
+              fontWeight: 600,
+              marginTop: "2.5rem",
+              marginBottom: "1rem",
+            }}
+          >
+            Recently Played
+          </h2>
+
+          {!loading && recentTracks.length === 0 && (
+            <p style={{ fontSize: "0.9rem", color: "#9ca3af" }}>
+              No recently played tracks found.
+            </p>
+          )}
+
+          <ol
+            style={{
+              listStyle: "none",
+              padding: 0,
+              margin: 0,
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.75rem",
+              maxWidth: "900px",
+              marginInline: "auto",
+            }}
+          >
+            {recentTracks.map((item, index) => {
+              const track = item.track; // recently played wraps the track inside item.track
+              return (
+                <li
+                  key={`${track.id}-${item.played_at}`}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "0.75rem 1rem",
+                    borderRadius: "0.9rem",
+                    background: "rgba(15,23,42,0.9)",
+                    boxShadow: "0 12px 30px rgba(0,0,0,0.4)",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.75rem",
+                      textAlign: "left",
+                    }}
+                  >
+                    <span
+                      style={{
+                        color: "#9ca3af",
+                        fontSize: "0.85rem",
+                        width: "1.5rem",
+                        textAlign: "right",
+                      }}
+                    >
+                      #{index + 1}
+                    </span>
+
+                    {track.album?.images?.[2] && (
+                      <img
+                        src={track.album.images[2].url}
+                        alt="cover"
+                        style={{
+                          width: "40px",
+                          height: "40px",
+                          borderRadius: "0.5rem",
+                          objectFit: "cover",
+                        }}
+                      />
+                    )}
+
+                    <div>
+                      <div style={{ fontSize: "0.95rem", fontWeight: 600 }}>
+                        {track.name}
+                      </div>
+                      <div style={{ fontSize: "0.8rem", color: "#9ca3af" }}>
+                        {track.artists.map((a) => a.name).join(", ")}
+                      </div>
+                    </div>
+                  </div>
+
+                  <a
+                    href={track.external_urls?.spotify}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      fontSize: "0.75rem",
+                      color: "#22c55e",
+                      textDecoration: "underline",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    Open
+                  </a>
+                </li>
+              );
+            })}
+          </ol>
+
+          {/* add top tracks content */}
           <h2
             style={{
               fontSize: "1.3rem",
@@ -360,9 +592,10 @@ function App() {
               marginBottom: "1rem",
             }}
           >
-            Top Tracks – All Time
+            Top Tracks
           </h2>
 
+          {/* button to select time range */}
           <div
             style={{
               display: "flex",
@@ -513,7 +746,7 @@ function App() {
             ))}
           </ol>
 
-          {/* add recently played content */}
+          {/* add top artists content */}
           <h2
             style={{
               fontSize: "1.3rem",
@@ -522,12 +755,48 @@ function App() {
               marginBottom: "1rem",
             }}
           >
-            Recently Played
+            Top Artists
           </h2>
 
-          {!loading && recentTracks.length === 0 && (
+          {/* button to select time range  */}
+          <div
+            style={{
+              display: "flex",
+              gap: "0.75rem",
+              justifyContent: "center",
+              marginBottom: "1rem",
+              flexWrap: "wrap",
+            }}
+          >
+            {[
+              { label: "1 Month", value: "short_term" },
+              { label: "6 Months", value: "medium_term" },
+              { label: "All Time", value: "long_term" },
+            ].map((btn) => (
+              <button
+                key={btn.value}
+                onClick={() => setArtistRange(btn.value)}
+                style={{
+                  padding: "0.5rem 1rem",
+                  borderRadius: "999px",
+                  border: "1px solid rgba(148,163,184,0.25)",
+                  background:
+                    artistRange === btn.value
+                      ? "rgba(34,197,94,0.18)"
+                      : "rgba(15,23,42,0.75)",
+                  color: "white",
+                  cursor: "pointer",
+                  fontWeight: 600,
+                }}
+              >
+                {btn.label}
+              </button>
+            ))}
+          </div>
+
+          {!loading && topArtists.length === 0 && (
             <p style={{ fontSize: "0.9rem", color: "#9ca3af" }}>
-              No recently played tracks found.
+              No top artists found for this time range.
             </p>
           )}
 
@@ -543,11 +812,238 @@ function App() {
               marginInline: "auto",
             }}
           >
-            {recentTracks.map((item, index) => {
-              const track = item.track; // recently played wraps the track inside item.track
-              return (
+            {topArtists.map((artist, index) => (
+              <li
+                key={artist.id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "0.75rem 1rem",
+                  borderRadius: "0.9rem",
+                  background: "rgba(15,23,42,0.9)",
+                  boxShadow: "0 12px 30px rgba(0,0,0,0.4)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.75rem",
+                    textAlign: "left",
+                  }}
+                >
+                  <span
+                    style={{
+                      color: "#9ca3af",
+                      fontSize: "0.85rem",
+                      width: "1.5rem",
+                      textAlign: "right",
+                    }}
+                  >
+                    #{index + 1}
+                  </span>
+
+                  {artist.images?.[2] && (
+                    <img
+                      src={artist.images[2].url}
+                      alt="artist"
+                      style={{
+                        width: "40px",
+                        height: "40px",
+                        borderRadius: "999px",
+                        objectFit: "cover",
+                      }}
+                    />
+                  )}
+
+                  <div>
+                    <div style={{ fontSize: "0.95rem", fontWeight: 600 }}>
+                      {artist.name}
+                    </div>
+                    <div style={{ fontSize: "0.8rem", color: "#9ca3af" }}>
+                      {artist.genres?.slice(0, 2).join(" · ") || "—"}
+                    </div>
+                  </div>
+                </div>
+
+                <a
+                  href={artist.external_urls?.spotify}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{
+                    fontSize: "0.75rem",
+                    color: "#22c55e",
+                    textDecoration: "underline",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Open
+                </a>
+              </li>
+            ))}
+          </ol>
+
+          {/* top genres content */}
+          <h2
+            style={{
+              fontSize: "1.3rem",
+              fontWeight: 600,
+              marginTop: "2.5rem",
+              marginBottom: "1rem",
+            }}
+          >
+            Top Genres
+          </h2>
+
+          {/* ✅ Separate time-range buttons for GENRES */}
+          <div
+            style={{
+              display: "flex",
+              gap: "0.75rem",
+              justifyContent: "center",
+              marginBottom: "1rem",
+              flexWrap: "wrap",
+            }}
+          >
+            {[
+              { label: "1 Month", value: "short_term" },
+              { label: "6 Months", value: "medium_term" },
+              { label: "All Time", value: "long_term" },
+            ].map((btn) => (
+              <button
+                key={btn.value}
+                onClick={() => setGenreRange(btn.value)}
+                style={{
+                  padding: "0.5rem 1rem",
+                  borderRadius: "999px",
+                  border: "1px solid rgba(148,163,184,0.25)",
+                  background:
+                    genreRange === btn.value
+                      ? "rgba(34,197,94,0.18)"
+                      : "rgba(15,23,42,0.75)",
+                  color: "white",
+                  cursor: "pointer",
+                  fontWeight: 600,
+                }}
+              >
+                {btn.label}
+              </button>
+            ))}
+          </div>
+
+          {topGenres.length === 0 ? (
+            <p style={{ fontSize: "0.9rem", color: "#9ca3af" }}>
+              No genres found yet.
+            </p>
+          ) : (
+            <ol
+              style={{
+                listStyle: "none",
+                padding: 0,
+                margin: 0,
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.75rem",
+                maxWidth: "900px",
+                marginInline: "auto",
+              }}
+            >
+              {topGenres.map((g) => (
                 <li
-                  key={`${track.id}-${item.played_at}`}
+                  key={g.genre}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "0.75rem 1rem",
+                    borderRadius: "0.9rem",
+                    background: "rgba(15,23,42,0.9)",
+                    boxShadow: "0 12px 30px rgba(0,0,0,0.4)",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.75rem",
+                    }}
+                  >
+                    <span
+                      style={{
+                        color: "#9ca3af",
+                        fontSize: "0.85rem",
+                        width: "2rem",
+                        textAlign: "right",
+                      }}
+                    >
+                      #{g.rank}
+                    </span>
+
+                    <div style={{ textAlign: "left" }}>
+                      <div style={{ fontSize: "0.95rem", fontWeight: 700 }}>
+                        {g.genre}
+                      </div>
+                      <div style={{ fontSize: "0.8rem", color: "#9ca3af" }}>
+                        Appears in{" "}
+                        <span style={{ color: "#22c55e", fontWeight: 700 }}>
+                          {g.count}
+                        </span>{" "}
+                        top artists
+                      </div>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
+
+          {/* top albums all time */}
+          <h2
+            style={{
+              fontSize: "1.3rem",
+              fontWeight: 600,
+              marginTop: "2.5rem",
+              marginBottom: "1rem",
+            }}
+          >
+            Top Albums (All Time)
+          </h2>
+
+          {albumsLoading && (
+            <p style={{ fontSize: "0.9rem", color: "#9ca3af" }}>
+              Loading albums…
+            </p>
+          )}
+
+          {albumsError && (
+            <p style={{ fontSize: "0.9rem", color: "#fca5a5" }}>
+              Albums error: {albumsError}
+            </p>
+          )}
+
+          {!albumsLoading && !albumsError && topAlbumsAllTime.length === 0 && (
+            <p style={{ fontSize: "0.9rem", color: "#9ca3af" }}>
+              No albums found yet.
+            </p>
+          )}
+
+          {topAlbumsAllTime.length > 0 && (
+            <ol
+              style={{
+                listStyle: "none",
+                padding: 0,
+                margin: 0,
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.75rem",
+                maxWidth: "900px",
+                marginInline: "auto",
+              }}
+            >
+              {topAlbumsAllTime.map((a, index) => (
+                <li
+                  key={a.id}
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -577,10 +1073,10 @@ function App() {
                       #{index + 1}
                     </span>
 
-                    {track.album?.images?.[2] && (
+                    {a.image && (
                       <img
-                        src={track.album.images[2].url}
-                        alt="cover"
+                        src={a.image}
+                        alt="album"
                         style={{
                           width: "40px",
                           height: "40px",
@@ -591,32 +1087,38 @@ function App() {
                     )}
 
                     <div>
-                      <div style={{ fontSize: "0.95rem", fontWeight: 600 }}>
-                        {track.name}
+                      <div style={{ fontSize: "0.95rem", fontWeight: 700 }}>
+                        {a.name}
                       </div>
                       <div style={{ fontSize: "0.8rem", color: "#9ca3af" }}>
-                        {track.artists.map((a) => a.name).join(", ")}
+                        {a.artist} ·{" "}
+                        <span style={{ color: "#22c55e", fontWeight: 700 }}>
+                          {a.count}
+                        </span>{" "}
+                        top tracks
                       </div>
                     </div>
                   </div>
 
-                  <a
-                    href={track.external_urls?.spotify}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{
-                      fontSize: "0.75rem",
-                      color: "#22c55e",
-                      textDecoration: "underline",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    Open
-                  </a>
+                  {a.url && (
+                    <a
+                      href={a.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{
+                        fontSize: "0.75rem",
+                        color: "#22c55e",
+                        textDecoration: "underline",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      Open
+                    </a>
+                  )}
                 </li>
-              );
-            })}
-          </ol>
+              ))}
+            </ol>
+          )}
         </section>
       </div>
     </main>
