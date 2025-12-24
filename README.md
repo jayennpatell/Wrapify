@@ -51,6 +51,8 @@ user-read-email
 user-top-read
 user-read-recently-played
 
+```
+
 ---
 
 ## 🧠 Key Learnings & Takeaways
