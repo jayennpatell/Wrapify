@@ -2,7 +2,6 @@
 
 **Wrapify** is an always-on Spotify Wrapped–style web app that lets users explore their listening habits anytime — not just once a year.
 
-🔗 **Live Demo:** https://wrapify-xi.vercel.app/
 
 ---
 
@@ -66,6 +65,14 @@ user-read-recently-played
 - Deploying a frontend-only OAuth app on Vercel
 
 ---
+
+## 🍴Quick Setup Instructions:
+1. Clone this repo and cd into the project directory.
+2. Run `npm install` to install dependencies
+3. Create a Spotify Developer app and get your client ID 
+4. Run `npm run dev -- --host 127.0.0.1 --port 5173` to start the dev server.
+5. Login into the same account as used in your Spotify Developer app.
+6. Enjoy exploring your Spotify listening data!
 
 ## 📄 License
 

@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import AuraBackground from "./components/AuraBackground";
 
+// import from .env
+// const CLIENT_ID = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
+// const REDIRECT_URI = import.meta.env.VITE_SPOTIFY_REDIRECT_URI;
+
 const CLIENT_ID = "efbb0aad9f8a439fb9f7b774e17e96d4";
 const REDIRECT_URI = "http://127.0.0.1:5173/callback";
 
